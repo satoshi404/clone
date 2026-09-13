@@ -54,6 +54,16 @@ static const DXGI_FORMAT DEPTH_FORMAT = DXGI_FORMAT_D32_FLOAT;
 // descriptor heap, which is a bigger addition (see the TODO in command_list_execute below).
 static ID3D12RootSignature *rootSignature = nullptr;
 static const UINT ROOT_CBV_COUNT = 8;
+static const UINT ROOT_PARAM_TEXTURE_TABLE = ROOT_CBV_COUNT; // root param 8: one shared SRV descriptor table (t0)
+
+// Textures share ONE fixed SRV slot in the root signature (t0) and ONE static sampler (s0, linear
+// wrap) baked directly into the root signature — no runtime sampler binding needed, matching how
+// DescriptorType::Sampler has no backing resource handle in gpu.hpp. This means only one texture can
+// be bound per draw call today; binding a second texture at a different slot would need its own
+// descriptor range/root parameter, which isn't wired up yet.
+static ID3D12DescriptorHeap *srvHeap = nullptr;
+static UINT srvDescriptorSize = 0;
+static const UINT MAX_TEXTURES = 64;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Resource pools
@@ -85,10 +95,18 @@ struct DescriptorSetResource
 	u32 bindingCount;
 };
 
+struct TextureResource
+{
+	ID3D12Resource *resource;
+	u32 width;
+	u32 height;
+};
+
 static HandlePool<BufferResource, 256> g_bufferPool;
 static HandlePool<ShaderResource, 128> g_shaderPool;
 static HandlePool<PipelineResource, 64> g_pipelinePool;
 static HandlePool<DescriptorSetResource, 128> g_descriptorSetPool;
+static HandlePool<TextureResource, MAX_TEXTURES> g_texturePool;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Enum translation
@@ -342,8 +360,9 @@ bool Backend::init()
 	dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
 	device->CreateDepthStencilView(depthBuffer, &dsvDesc, dsvHeap->GetCPUDescriptorHandleForHeapStart());
 
-	// Global root signature: N root CBVs, no descriptor tables (see comment near ROOT_CBV_COUNT)
-	D3D12_ROOT_PARAMETER rootParams[ROOT_CBV_COUNT] = {};
+	// Global root signature: N root CBVs (b0..b7) + one shared SRV descriptor table (t0) for
+	// textures + one static sampler (s0). See comment near ROOT_PARAM_TEXTURE_TABLE.
+	D3D12_ROOT_PARAMETER rootParams[ROOT_CBV_COUNT + 1] = {};
 	for (UINT i = 0; i < ROOT_CBV_COUNT; ++i)
 	{
 		rootParams[i].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
@@ -352,11 +371,33 @@ bool Backend::init()
 		rootParams[i].Descriptor.RegisterSpace = 0;
 	}
 
+	D3D12_DESCRIPTOR_RANGE srvRange = {};
+	srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+	srvRange.NumDescriptors = 1;
+	srvRange.BaseShaderRegister = 0; // t0
+	srvRange.RegisterSpace = 0;
+	srvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+	rootParams[ROOT_PARAM_TEXTURE_TABLE].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+	rootParams[ROOT_PARAM_TEXTURE_TABLE].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+	rootParams[ROOT_PARAM_TEXTURE_TABLE].DescriptorTable.NumDescriptorRanges = 1;
+	rootParams[ROOT_PARAM_TEXTURE_TABLE].DescriptorTable.pDescriptorRanges = &srvRange;
+
+	D3D12_STATIC_SAMPLER_DESC samplerDesc = {};
+	samplerDesc.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+	samplerDesc.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+	samplerDesc.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+	samplerDesc.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+	samplerDesc.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
+	samplerDesc.ShaderRegister = 0; // s0
+	samplerDesc.RegisterSpace = 0;
+	samplerDesc.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
 	D3D12_ROOT_SIGNATURE_DESC rootSigDesc = {};
-	rootSigDesc.NumParameters = ROOT_CBV_COUNT;
+	rootSigDesc.NumParameters = ROOT_CBV_COUNT + 1;
 	rootSigDesc.pParameters = rootParams;
-	rootSigDesc.NumStaticSamplers = 0;
-	rootSigDesc.pStaticSamplers = nullptr;
+	rootSigDesc.NumStaticSamplers = 1;
+	rootSigDesc.pStaticSamplers = &samplerDesc;
 	rootSigDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
 	ID3DBlob *signatureBlob = nullptr;
@@ -380,10 +421,25 @@ bool Backend::init()
 	viewport = { 0.0f, 0.0f, static_cast<float>(WindowConfig::get_width()), static_cast<float>(WindowConfig::get_height()), 0.0f, 1.0f };
 	scissorRect = { 0, 0, static_cast<LONG>(WindowConfig::get_width()), static_cast<LONG>(WindowConfig::get_height()) };
 
+	// SRV heap for textures: shader-visible, fixed capacity. Each texture gets one persistent slot
+	// (heap index == its pool index), created/overwritten in Backend::texture_create.
+	D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
+	srvHeapDesc.NumDescriptors = MAX_TEXTURES;
+	srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+	srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+	hr = device->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&srvHeap));
+	if (FAILED(hr))
+	{
+		TerminalDebug::println(PrintColorType_Red, "Failed to create SRV descriptor heap");
+		return false;
+	}
+	srvDescriptorSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
 	g_bufferPool.init();
 	g_shaderPool.init();
 	g_pipelinePool.init();
 	g_descriptorSetPool.init();
+	g_texturePool.init();
 
 	TerminalDebug::println(PrintColorType_Green, "D3D12 backend initialized successfully");
 	return true;
@@ -441,6 +497,7 @@ void Backend::free()
 	}
 
 	if (rtvHeap) { rtvHeap->Release(); rtvHeap = nullptr; }
+	if (srvHeap) { srvHeap->Release(); srvHeap = nullptr; }
 	if (swapChain) { swapChain->Release(); swapChain = nullptr; }
 	if (commandQueue) { commandQueue->Release(); commandQueue = nullptr; }
 	if (device) { device->Release(); device = nullptr; }
@@ -460,6 +517,12 @@ void Backend::render_pass_begin(RenderPass *renderPass)
 	commandList->Reset(commandAllocator, nullptr);
 
 	commandList->SetGraphicsRootSignature(rootSignature);
+
+	// Precisa ser setado sempre que a command list é resetada — SetGraphicsRootDescriptorTable
+	// abaixo (em SetDescriptorSet) depende de um heap shader-visible já vinculado.
+	ID3D12DescriptorHeap *heaps[] = { srvHeap };
+	commandList->SetDescriptorHeaps(1, heaps);
+
 	commandList->RSSetViewports(1, &viewport);
 	commandList->RSSetScissorRects(1, &scissorRect);
 
@@ -597,6 +660,165 @@ void Backend::buffer_destroy(BufferHandle buffer)
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Textures
+//
+// UNLIKE buffers, a texture can't just live on an upload heap with ROW_MAJOR layout and be sampled
+// directly — GPUs need an optimal/tiled layout to sample efficiently, and most drivers reject (or
+// simply fail to create) an SRV-sampleable Texture2D placed straight on an upload heap. So textures
+// need the "real" D3D12 upload path: a DEFAULT-heap texture (opaque/optimal layout) + an UPLOAD-heap
+// staging buffer + a GPU-side CopyTextureRegion + a barrier to PIXEL_SHADER_RESOURCE. This reuses the
+// same commandList/commandAllocator/fence the render loop uses, since texture_create only ever runs
+// during setup, never nested inside a render_pass_begin/end block.
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+TextureHandle Backend::texture_create(const TextureDesc &desc)
+{
+	Handle h = g_texturePool.acquire();
+	if (!handle_is_valid(h))
+	{
+		TerminalDebug::println(PrintColorType_Red, "Texture pool exhausted");
+		return { HANDLE_INVALID };
+	}
+
+	D3D12_RESOURCE_DESC texDesc = {};
+	texDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+	texDesc.Width = desc.width;
+	texDesc.Height = desc.height;
+	texDesc.DepthOrArraySize = 1;
+	texDesc.MipLevels = 1;
+	texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	texDesc.SampleDesc.Count = 1;
+	texDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN; // deixa o driver escolher o layout tiled ótimo
+
+	D3D12_HEAP_PROPERTIES defaultHeapProps = {};
+	defaultHeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+	ID3D12Resource *resource = nullptr;
+	HRESULT hr = device->CreateCommittedResource(&defaultHeapProps, D3D12_HEAP_FLAG_NONE, &texDesc,
+		D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&resource));
+	if (FAILED(hr))
+	{
+		TerminalDebug::println(PrintColorType_Red, "Failed to create texture (default heap)");
+		g_texturePool.release(h);
+		return { HANDLE_INVALID };
+	}
+
+	// Footprint dita exatamente como o driver quer os dados de origem organizados (RowPitch pode
+	// ter padding além de width*4) — consultamos em vez de assumir um layout tightly-packed.
+	D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint = {};
+	UINT numRows = 0;
+	UINT64 rowSizeInBytes = 0;
+	UINT64 uploadBufferSize = 0;
+	device->GetCopyableFootprints(&texDesc, 0, 1, 0, &footprint, &numRows, &rowSizeInBytes, &uploadBufferSize);
+
+	D3D12_HEAP_PROPERTIES uploadHeapProps = {};
+	uploadHeapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+
+	D3D12_RESOURCE_DESC uploadBufferDesc = {};
+	uploadBufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+	uploadBufferDesc.Width = uploadBufferSize;
+	uploadBufferDesc.Height = 1;
+	uploadBufferDesc.DepthOrArraySize = 1;
+	uploadBufferDesc.MipLevels = 1;
+	uploadBufferDesc.Format = DXGI_FORMAT_UNKNOWN;
+	uploadBufferDesc.SampleDesc.Count = 1;
+	uploadBufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR; // um buffer comum, isso É válido pra buffer
+
+	ID3D12Resource *uploadBuffer = nullptr;
+	hr = device->CreateCommittedResource(&uploadHeapProps, D3D12_HEAP_FLAG_NONE, &uploadBufferDesc,
+		D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&uploadBuffer));
+	if (FAILED(hr))
+	{
+		TerminalDebug::println(PrintColorType_Red, "Failed to create texture upload buffer");
+		resource->Release();
+		g_texturePool.release(h);
+		return { HANDLE_INVALID };
+	}
+
+	void *mappedPtr = nullptr;
+	D3D12_RANGE readRange = { 0, 0 };
+	uploadBuffer->Map(0, &readRange, &mappedPtr);
+	if (desc.data)
+	{
+		u8 *dstBase = static_cast<u8*>(mappedPtr);
+		const u8 *srcBase = static_cast<const u8*>(desc.data);
+		const u32 srcRowBytes = desc.width * 4; // input é sempre RGBA8 tightly-packed
+
+		for (UINT row = 0; row < desc.height; ++row)
+		{
+			memcpy(dstBase + row * footprint.Footprint.RowPitch, srcBase + row * srcRowBytes, srcRowBytes);
+		}
+	}
+	uploadBuffer->Unmap(0, nullptr);
+
+	// Cópia GPU-side do staging buffer pra textura de layout ótimo. Reaproveita o command
+	// allocator/list/fence globais — seguro porque isso roda só no setup, nunca dentro de um
+	// render_pass_begin/end ativo (que faria seu próprio Reset() logo em seguida sem conflito).
+	commandAllocator->Reset();
+	commandList->Reset(commandAllocator, nullptr);
+
+	D3D12_TEXTURE_COPY_LOCATION dst = {};
+	dst.pResource = resource;
+	dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+	dst.SubresourceIndex = 0;
+
+	D3D12_TEXTURE_COPY_LOCATION src = {};
+	src.pResource = uploadBuffer;
+	src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+	src.PlacedFootprint = footprint;
+
+	commandList->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+
+	D3D12_RESOURCE_BARRIER barrier = {};
+	barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+	barrier.Transition.pResource = resource;
+	barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+	barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+	barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+	commandList->ResourceBarrier(1, &barrier);
+
+	commandList->Close();
+	ID3D12CommandList *ppCommandLists[] = { commandList };
+	commandQueue->ExecuteCommandLists(1, ppCommandLists);
+
+	// Espera síncrona — a mais simples e correta aqui, já que carregamento de textura só
+	// acontece durante o setup (não é um caminho hot por frame).
+	const u64 uploadFenceValue = ++fenceValue;
+	commandQueue->Signal(fence, uploadFenceValue);
+	if (fence->GetCompletedValue() < uploadFenceValue)
+	{
+		fence->SetEventOnCompletion(uploadFenceValue, fenceEvent);
+		WaitForSingleObject(fenceEvent, INFINITE);
+	}
+
+	uploadBuffer->Release(); // seguro: já esperamos a GPU terminar a cópia acima
+
+	D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+	srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+	srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+	srvDesc.Texture2D.MipLevels = 1;
+
+	D3D12_CPU_DESCRIPTOR_HANDLE srvHandle = srvHeap->GetCPUDescriptorHandleForHeapStart();
+	srvHandle.ptr += (SIZE_T)h.index * srvDescriptorSize;
+	device->CreateShaderResourceView(resource, &srvDesc, srvHandle);
+
+	TextureResource *res = g_texturePool.get(h);
+	res->resource = resource;
+	res->width = desc.width;
+	res->height = desc.height;
+
+	return { h };
+}
+
+void Backend::texture_destroy(TextureHandle texture)
+{
+	TextureResource *res = g_texturePool.get(texture.handle);
+	if (res && res->resource) res->resource->Release();
+	g_texturePool.release(texture.handle);
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Shaders
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -685,6 +907,8 @@ PipelineHandle Backend::pipeline_create(const PipelineDesc &desc)
 		inputElements[i].InputSlot = 0;
 		inputElements[i].AlignedByteOffset = attr.offset;
 		inputElements[i].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
+
+		inputElements[i].InstanceDataStepRate = 0;
 	}
 
 	D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
@@ -826,11 +1050,24 @@ void Backend::command_list_execute(::CommandList *cmdList)
 						BufferResource *buf = g_bufferPool.get(binding.buffer.handle);
 						if (buf) commandList->SetGraphicsRootConstantBufferView(binding.slot, buf->resource->GetGPUVirtualAddress());
 					}
-					else
+					else if (binding.type == DescriptorType::Texture)
 					{
-						// TODO: textures/samplers need an SRV/sampler descriptor heap + descriptor
-						// table root parameter, which this backend doesn't allocate yet.
-						todo( "Texture/Sampler descriptors not implemented yet" );
+						TextureResource *tex = g_texturePool.get(binding.texture.handle);
+						if (tex)
+						{
+							// Fixed slot t0 today (see ROOT_PARAM_TEXTURE_TABLE) — binding.slot is
+							// ignored for textures until multiple simultaneous textures are needed.
+							D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = srvHeap->GetGPUDescriptorHandleForHeapStart();
+							gpuHandle.ptr += (UINT64)binding.texture.handle.index * srvDescriptorSize;
+							commandList->SetGraphicsRootDescriptorTable(ROOT_PARAM_TEXTURE_TABLE, gpuHandle);
+						}
+					}
+					else // DescriptorType::Sampler
+					{
+						// No-op: the one sampler this backend supports is a STATIC sampler baked
+						// into the root signature (s0, linear-wrap) at init time — see Backend::init.
+						// gpu.hpp has no SamplerHandle to bind at runtime, so there's nothing to do
+						// here; this branch exists so a Sampler binding doesn't hit the old TODO.
 					}
 				}
 				break;

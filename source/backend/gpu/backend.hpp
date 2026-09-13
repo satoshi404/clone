@@ -9,6 +9,8 @@ namespace Backend
 	extern void info();
     extern void free();
 
+	extern TextureHandle texture_create(const TextureDesc &desc);
+extern void texture_destroy(TextureHandle texture);
 	extern void render_pass_begin(RenderPass *renderPass);
 	extern void render_pass_end(RenderPass *renderPass);
     extern BufferHandle buffer_create(const BufferDesc &desc);

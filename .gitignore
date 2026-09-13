@@ -3,6 +3,8 @@
 /tests
 *.o
 *.obj
+*.mtl
+*.png
 *.exe
 *.out
 *.dll

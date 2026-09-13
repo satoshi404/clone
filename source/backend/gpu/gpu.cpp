@@ -77,6 +77,9 @@ BufferHandle Gpu::buffer_create(const BufferDesc &desc)   { return Backend::buff
 void Gpu::buffer_update(BufferHandle buffer, u32 offset, u32 size, const void *data) { Backend::buffer_update(buffer, offset, size, data); }
 void Gpu::buffer_destroy(BufferHandle buffer)             { Backend::buffer_destroy(buffer); }
 
+TextureHandle Gpu::texture_create(const TextureDesc &desc) { return Backend::texture_create(desc); }
+void Gpu::texture_destroy(TextureHandle texture)          { Backend::texture_destroy(texture); }
+
 ShaderHandle Gpu::shader_create(const ShaderDesc &desc)   { return Backend::shader_create(desc); }
 void Gpu::shader_destroy(ShaderHandle shader)             { Backend::shader_destroy(shader); }
 

@@ -7,37 +7,61 @@
 
 #include "mat4.hpp"
 #include "obj_loader.hpp"
+#include "texture_loader.hpp"
+
+struct MaterialConstants
+{
+    float diffuse[4];
+    float specular[4];
+    float shininess;
+};
 
 static const char *shaderSource = R"(
+
 cbuffer FrameConstants : register(b0)
 {
     row_major float4x4 mvp;
 };
 
+cbuffer MaterialConstants : register(b1)
+{
+    float4 diffuseColor;
+    float4 specularColor;
+    float shininess;
+};
+
+Texture2D    diffuseTex     : register(t0);
+SamplerState diffuseSampler : register(s0); // sampler estático, ver root signature no backend
+
 struct VSInput
 {
     float3 position : ATTRIB0;
-    float3 color    : ATTRIB1;
+    float3 normal   : ATTRIB1;
+    float2 uv       : ATTRIB2;
 };
 
 struct PSInput
 {
     float4 position : SV_POSITION;
-    float4 color    : COLOR0;
+    float3 normal   : NORMAL0;
+    float2 uv       : TEXCOORD0;
 };
 
 PSInput VSMain(VSInput input)
 {
     PSInput output;
-    output.position = mul( float4( input.position, 1.0f ), mvp );
-    output.color = float4( input.color, 1.0f );
+    output.position = mul( float4(input.position, 1.0f), mvp );
+    output.normal = input.normal;
+    output.uv = input.uv;
     return output;
 }
 
 float4 PSMain(PSInput input) : SV_TARGET
 {
-    return input.color;
+    float4 texColor = diffuseTex.Sample(diffuseSampler, input.uv);
+    return texColor * diffuseColor; // diffuseColor é branco (1,1,1,1) quando o .mtl não tem Kd customizado
 }
+
 )";
 
 // ==========================================
@@ -141,6 +165,17 @@ struct ScopedDescriptorSet
     }
 };
 
+struct ScopedTexture
+{
+    TextureHandle handle{HANDLE_INVALID};
+    ScopedTexture(const TextureDesc &desc) { handle = Gpu::texture_create(desc); }
+    ~ScopedTexture()
+    {
+        if (handle.handle.generation != Handle{HANDLE_INVALID}.generation)
+            Gpu::texture_destroy(handle);
+    }
+};
+
 // ==========================================
 // MAIN APPLICATION
 // ==========================================
@@ -167,7 +202,7 @@ int main()
     Window::show();
 
     ObjMeshData objMesh;
-    if (!obj_load("domeka.obj", objMesh))
+    if (!obj_load("ship.obj", objMesh))
     {
         TerminalDebug::println(PrintColorType_Red, "Failed to load OBJ mesh");
         return EXIT_FAILED;
@@ -202,17 +237,72 @@ int main()
     mvpBufferDesc.usage = BufferUsage::Dynamic;
     ScopedBuffer mvpBuffer(mvpBufferDesc);
 
-    TerminalDebug::println(PrintColorType_Yellow, "Chega aqui");
+    MaterialConstants material = {};
+
+    material.diffuse[0] = objMesh.materials[0].diffuse[0];
+    material.diffuse[1] = objMesh.materials[0].diffuse[1];
+    material.diffuse[2] = objMesh.materials[0].diffuse[2];
+    material.diffuse[3] = 1.0f;
+
+    material.specular[0] = objMesh.materials[0].specular[0];
+    material.specular[1] = objMesh.materials[0].specular[1];
+    material.specular[2] = objMesh.materials[0].specular[2];
+    material.specular[3] = 1.0f;
+
+    material.shininess = objMesh.materials[0].shininess;
+
+    TextureData texData;
+    if (!texture_load(objMesh.materials[0].diffuseTexture, texData))
+    {
+        TerminalDebug::println(PrintColorType_Red, "Failed to load texture");
+        return EXIT_FAILED;
+    }
+
+    TextureDesc texDesc;
+    texDesc.width = texData.width;
+    texDesc.height = texData.height;
+    texDesc.data = texData.pixels;
+    ScopedTexture diffuseTexture(texDesc);
 
     DescriptorBinding mvpBinding = {};
-mvpBinding.slot   = 0; // b0, bate com o cbuffer do shader
-mvpBinding.type   = DescriptorType::UniformBuffer;
-mvpBinding.buffer = mvpBuffer.handle;
+    mvpBinding.slot = 0; // b0
+    mvpBinding.type = DescriptorType::UniformBuffer;
+    mvpBinding.buffer = mvpBuffer.handle;
 
-DescriptorSetDesc descSetDesc = {};
-descSetDesc.bindingCount = 1;
-descSetDesc.bindings = &mvpBinding;
-ScopedDescriptorSet mvpDescSet(descSetDesc);
+    BufferDesc materialBufferDesc = {};
+    materialBufferDesc.size = sizeof(MaterialConstants);
+    materialBufferDesc.type = BufferType::Uniform;
+    materialBufferDesc.usage = BufferUsage::Dynamic;
+
+    ScopedBuffer materialBuffer(materialBufferDesc);
+
+    DescriptorBinding materialBinding = {};
+    materialBinding.slot = 1; // b1
+    materialBinding.type = DescriptorType::UniformBuffer;
+    materialBinding.buffer = materialBuffer.handle;
+
+    DescriptorBinding textureBinding = {};
+    textureBinding.slot = 0; // t0 — namespace de registrador separado de b0/b1, não colide
+    textureBinding.type = DescriptorType::Texture;
+    textureBinding.texture = diffuseTexture.handle;
+
+    DescriptorBinding bindings[3] =
+        {
+            mvpBinding,
+            materialBinding,
+            textureBinding};
+
+    DescriptorSetDesc descSetDesc = {};
+    descSetDesc.bindingCount = 3;
+    descSetDesc.bindings = bindings;
+
+    ScopedDescriptorSet descriptorSet(descSetDesc);
+
+    Gpu::buffer_update(
+        materialBuffer.handle,
+        0,
+        sizeof(MaterialConstants),
+        &material);
 
     // --- Auto-enquadrar câmera a partir do bounding box do obj carregado ---
     float centerX = (objMesh.minBounds[0] + objMesh.maxBounds[0]) * 0.5f;
@@ -262,15 +352,19 @@ ScopedDescriptorSet mvpDescSet(descSetDesc);
     pipeline.cullMode = CullMode::None;
 
     pipeline.vertexLayout.attributes[0].location = 0;
-    pipeline.vertexLayout.attributes[0].format = VertexFormat::Float3; // position
+    pipeline.vertexLayout.attributes[0].format = VertexFormat::Float3;
     pipeline.vertexLayout.attributes[0].offset = 0;
 
     pipeline.vertexLayout.attributes[1].location = 1;
-    pipeline.vertexLayout.attributes[1].format = VertexFormat::Float3; // normal (era Float4 color)
+    pipeline.vertexLayout.attributes[1].format = VertexFormat::Float3;
     pipeline.vertexLayout.attributes[1].offset = 3 * sizeof(float);
 
-    pipeline.vertexLayout.attributeCount = 2;
-    pipeline.vertexLayout.stride = 6 * sizeof(float); // era 7 (3 pos + 4 color), agora 3 pos + 3 normal
+    pipeline.vertexLayout.attributes[2].location = 2;
+    pipeline.vertexLayout.attributes[2].format = VertexFormat::Float2;
+    pipeline.vertexLayout.attributes[2].offset = 6 * sizeof(float);
+
+    pipeline.vertexLayout.attributeCount = 3;
+    pipeline.vertexLayout.stride = 8 * sizeof(float);
 
     // Nao chega aqui
     TerminalDebug::println(PrintColorType_Cyan, "Before pipeline_create");
@@ -312,7 +406,7 @@ ScopedDescriptorSet mvpDescSet(descSetDesc);
 
         Gpu::render_pass_begin(&renderPass.pass);
         Gpu::command_list_set_pipeline(&cmdList.list, pHandle.handle);
-        Gpu::command_list_set_descriptor_set(&cmdList.list, mvpDescSet.handle, 0); // <- novo
+        Gpu::command_list_set_descriptor_set(&cmdList.list, descriptorSet.handle, 0); // <- novo
         Gpu::command_list_draw_mesh(&cmdList.list, screenQuadMesh.handle, 1);
         Gpu::command_list_execute(&cmdList.list);
         Gpu::render_pass_end(&renderPass.pass);

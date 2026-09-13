@@ -120,6 +120,19 @@ struct BufferDesc
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Textures
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+struct TextureDesc
+{
+	u32 width;
+	u32 height;
+	const void *data; // RGBA8, tightly packed, width*height*4 bytes. May be nullptr for a texture
+	                   // filled later (not currently supported by any backend — texture_update
+	                   // doesn't exist yet, unlike buffer_update).
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Vertex layout (shared by Mesh + Pipeline, so both agree on how vertex data is interpreted)
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -349,6 +362,10 @@ namespace Gpu
 	extern BufferHandle buffer_create(const BufferDesc &desc);
 	extern void buffer_update(BufferHandle buffer, u32 offset, u32 size, const void *data);
 	extern void buffer_destroy(BufferHandle buffer);
+
+	// Textures
+	extern TextureHandle texture_create(const TextureDesc &desc);
+	extern void texture_destroy(TextureHandle texture);
 
 	// Shaders
 	extern ShaderHandle shader_create(const ShaderDesc &desc);
