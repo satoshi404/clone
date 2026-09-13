@@ -8,91 +8,58 @@
 #include <string.h>
 
 static const char *shaderSource = R"(
+// Equivalent to an OpenGL Uniform Block
+cbuffer MyUniforms : register(b0)
+{
+    float3 u_offset; // 12 bytes
+    float  u_time;   // 4 bytes -> (Total block size: 16 bytes)
+};
+
+struct VSInput
+{
+    float3 position : ATTRIB0;
+    float4 color    : ATTRIB1;
+};
+
 struct PSInput
 {
     float4 position : SV_POSITION;
-    float4 color : COLOR;
-    float2 uv : TEXCOORD0;
+    float4 color    : COLOR0;
 };
 
-// Signed Distance Function (SDF) for a simple sphere
-float map(float3 pos)
+PSInput VSMain(VSInput input)
 {
-    return length(pos) - 0.5f;
-}
+    PSInput output;
 
-// Raymarching Loop
-float rayMarch(float3 ro, float3 rd)
-{
-    float t = 0.0f;
-    for (int i = 0; i < 100; i++)
-    {
-        float3 p = ro + rd * t;
-        float d = map(p);
-        if (d < 0.001f || t > 100.0f) { break; }
-        t += d;
-    }
-    return t;
-}
+    // Using the uniform variables just like in OpenGL!
+    float3 finalPosition = input.position + u_offset;
+    finalPosition.y += sin(u_time) * 0.2f; // simple bounce animation
 
-// Alterado para ATTRIB0 e ATTRIB1 para casar com a convenção do seu Backend
-PSInput VSMain(float3 position : ATTRIB0, float4 color : ATTRIB1)
-{
-    PSInput result;
+    output.position = float4(finalPosition, 1.0f);
+    output.color = input.color;
 
-    // Direct assignment for pipeline positioning
-    result.position = float4(position, 1.0f);
-    result.color = color;
-
-    // Pass coordinates normalized to [-1, 1] as UVs for ray generation
-    result.uv = position.xy;
-
-    return result;
+    return output;
 }
 
 float4 PSMain(PSInput input) : SV_TARGET
 {
-    // Ray origin (camera position back on Z axis)
-    float3 ro = float3(0.0f, 0.0f, -2.0f);
-
-    // Ray direction (Perspective projection using screen UV coordinates)
-    float3 rd = normalize(float3(input.uv, 1.0f));
-
-    // March the ray through the scene
-    float t = rayMarch(ro, rd);
-
-    // If the ray hit the sphere (t < max distance limit)
-    if (t < 100.0f)
-    {
-        // Calculate a simple diffuse lighting effect based on surface normals
-        float3 p = ro + rd * t;
-
-        // Fast numerical normal extraction
-        float2 e = float2(0.001f, 0.0f);
-        float3 normal = normalize(float3(
-            map(p + e.xyy) - map(p - e.xyy),
-            map(p + e.yxy) - map(p - e.yxy),
-            map(p + e.yyx) - map(p - e.yyx)
-        ));
-
-        // Simple light setup from upper-right front
-        float3 lightDir = normalize(float3(1.0f, 1.0f, -1.0f));
-        float diffuse = max(dot(normal, lightDir), 0.2f); // 0.2 ambient floor
-
-        return input.color * diffuse;
-    }
-
-    // Background color (Discard or return transparent black)
-    return float4(0.0f, 0.0f, 0.0f, 1.0f);
+    return input.color;
 }
 )";
 
-// Interleaved Vertices: Position(X, Y, Z) + Color(R, G, B, A)
+
 static float data[] =
 {
-  -1.0f, -1.0f,  0.0f,   1.0f, 1.0f, 1.0f, 1.0f, // Bottom-left
-   3.0f, -1.0f,  0.0f,   1.0f, 1.0f, 1.0f, 1.0f, // Bottom-right extra
-  -1.0f,  3.0f,  0.0f,   1.0f, 1.0f, 1.0f, 1.0f  // Top-left extra
+    // Triangle 1
+    // position              // color
+     0.5f,  0.5f, 0.0f,      1.0f, 0.0f, 0.0f, 1.0f, // Top-Right
+    -0.5f,  0.5f, 0.0f,      0.0f, 1.0f, 0.0f, 1.0f, // Top-Left
+    -0.5f, -0.5f, 0.0f,      0.0f, 1.0f, 1.0f, 1.0f, // Bottom-Left
+
+    // Triangle 2
+    -0.5f, -0.5f, 0.0f,      0.0f, 1.0f, 1.0f, 1.0f, // Bottom-Left (Shared)
+     0.5f, -0.5f, 0.0f,      0.0f, 0.0f, 1.0f, 1.0f, // Bottom-Right
+     0.5f,  0.5f, 0.0f,      1.0f, 0.0f, 0.0f, 1.0f  // Top-Right (Shared)
 };
 
 int main()
@@ -162,17 +129,21 @@ int main()
     return EXIT_FAILED;
   }
 
-  renderPass.clearColor[0] = 0.0f;
-  renderPass.clearColor[1] = 0.0f;
-  renderPass.clearColor[2] = 0.0f;
+  renderPass.clearColor[0] = 0.3f;
+  renderPass.clearColor[1] = 0.3f;
+  renderPass.clearColor[2] = 0.3f;
   renderPass.clearColor[3] = 1.0f;
 
   // Configuração explícita do Vertex Layout exigida pelo seu D3D12 Backend
-  PipelineDesc pipeline = {};
-  pipeline.vertexShader = vsHandle;
-  pipeline.fragmentShader = fsHandle;
-  pipeline.blendEnable = false;
-  pipeline.topology = PrimitiveTopology::TriangleList;
+ PipelineDesc pipeline = {};
+
+pipeline.vertexShader = vsHandle;
+pipeline.fragmentShader = fsHandle;
+
+pipeline.blendEnable = false;
+
+pipeline.topology = PrimitiveTopology::TriangleList;
+pipeline.cullMode = CullMode::None;
 
   // Atributo 0: Posição (float3) -> Localização 0, Offset 0
   pipeline.vertexLayout.attributes[0].location = 0;
@@ -191,8 +162,31 @@ int main()
 
   MeshDesc canvasMeshDesc = {};
   canvasMeshDesc.vertexBuffer = buffer_vertex;
-  canvasMeshDesc.vertexCount = 3;
+  canvasMeshDesc.vertexCount = 6;
   MeshHandle screenQuadMesh = Gpu::mesh_create(canvasMeshDesc);
+
+  float totalElapsedTime = 0.;
+
+  struct EngineUniforms {
+    float offset[3];
+    float time;
+  };
+
+  EngineUniforms cpuData;
+  cpuData.offset[0] = 0.0f;
+  cpuData.offset[1] = 0.1f; // Shift up slightly
+  cpuData.offset[2] = 0.0f;
+  cpuData.time = totalElapsedTime;
+
+
+  DescriptorBinding binding = {};
+  binding.slot = 0;
+  binding.type = DescriptorType::UniformBuffer;
+
+  DescriptorSetDesc desc = {};
+  desc.bindings = &binding;
+  desc.bindingCount = 1;
+  DescriptorSetHandle desHandle = Gpu::descriptor_set_create(  desc );
 
   Window::show();
 
@@ -205,17 +199,19 @@ int main()
     }
     Keyboard::update(0);
 
+    cpuData.time += 0.016f;
+    Gpu::descriptor_set_update( desHandle , desc);
+
     Gpu::command_list_clear(&cmdList);
 
+    Gpu::render_pass_begin(&renderPass);
     // Grava os tokens na fila da CPU
     Gpu::command_list_set_pipeline(&cmdList, pHandle);
+    Gpu::command_list_set_descriptor_set(&cmdList, desHandle, 0);
     Gpu::command_list_draw_mesh(&cmdList, screenQuadMesh, 1);
-
-    // Executa o ciclo de vida nativo e desenha o frame
-    Gpu::render_pass_begin(&renderPass);
-    Gpu::render_pass_end(&renderPass);
-
     Gpu::command_list_execute(&cmdList);
+    // Executa o ciclo de vida nativo e desenha o frame
+    Gpu::render_pass_end(&renderPass);
   }
 
   Gpu::mesh_destroy(screenQuadMesh);
