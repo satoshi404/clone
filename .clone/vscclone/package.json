@@ -1,0 +1,76 @@
+{
+  "name": "vscblood",
+  "displayName": "vscblood",
+  "description": "Blood Engine - Visual Studio Code Extension",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.78.0"
+  },
+  "categories": [
+    "Other",
+    "Programming Languages"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+		"workspaceContains:.blood"
+	],
+  "contributes": {
+    "commands": [
+      {
+        "command": "vscblood.generate",
+        "title": "Blood: Generate Build ( Ninja ) ",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "vscblood.build",
+        "title": "Blood: Build ",
+        "icon": "$(check)"
+      },
+      {
+        "command": "vscblood.run",
+        "title": "Blood: Run ",
+        "icon": "$(play)"
+      },
+      {
+        "command": "vscblood.clean",
+        "title": "Blood: Clean ",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "vscblood.rebuild",
+        "title": "Blood: Rebuild ",
+        "icon": "$(refresh)"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "vscblood.generate"
+        },
+        {
+          "command": "vscblood.build"
+        },
+        {
+          "command": "vscblood.play"
+        },
+        {
+          "command": "vscblood.clean"
+        },
+        {
+          "command": "vscblood.rebuild"
+        }
+      ]
+    }
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.78.0",
+    "@types/glob": "^8.1.0",
+    "@types/mocha": "^10.0.1",
+    "@types/node": "16.x",
+    "eslint": "^8.39.0",
+    "glob": "^8.1.0",
+    "mocha": "^10.2.0",
+    "typescript": "^5.0.4",
+    "@vscode/test-electron": "^2.3.0"
+  }
+}

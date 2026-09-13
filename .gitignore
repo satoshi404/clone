@@ -1,0 +1,11 @@
+/build
+/build/objects
+/tests
+*.o
+*.obj
+*.exe
+*.out
+*.dll
+*.so
+*.a
+generator

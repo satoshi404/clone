@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"name": "clone",
+			"path": "../../clone"
+		},
+		{
+			"name": ".vscode",
+			"path": "."
+		}
+	],
+	"settings": {}
+}

@@ -1,0 +1,150 @@
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+###################################Blood Build Generator ( Ninja )###################################
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+ninja_required_version = 1.10
+
+builddir = build
+objdir = build/objects
+bindir = build/bin
+
+cflags = -std=c++20 -Isource -Wall -Wextra -Wno-unused-parameter -g -O0
+ldflags = -lxcb -lxcb-keysyms -lX11 -lX11-xcb -lGL -lGLEW -lpthread -lm
+
+rule cxx
+ command = clang++ -MMD -MT $out -MF $out.d  $cflags -c $in -o $out
+ description = CXX $in
+ depfile = $out.d
+ deps = gcc
+
+rule link
+ command = clang++ $in $ldflags -o $out
+ description = LINK $out
+
+rule archive
+ command = ar rcs $out $in
+ description = AR $out
+
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+###########################################[ source/core ]###########################################
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+build $objdir/index.0_name.debug.cpp.o: cxx source/core/debug.cpp
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+#########################################[ source/platform ]#########################################
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+build $objdir/index.1_name.keyboard.cpp.o: cxx source/platform/keyboard.cpp
+build $objdir/index.1_name.window.config.cpp.o: cxx source/platform/window.config.cpp
+build $objdir/index.1_name.mouse.cpp.o: cxx source/platform/mouse.cpp
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+#######################################[ source/platform/xcb ]#######################################
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+build $objdir/index.2_name.window.cpp.o: cxx source/platform/xcb/window.cpp
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+########################################[ source/vendor/x11 ]########################################
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+build $objdir/index.4_name.xutil.cpp.o: cxx source/vendor/x11/xutil.cpp
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+#################################[ source/renderer/backend/opengl ]#################################
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+build $objdir/index.5_name.buffer.cpp.o: cxx source/renderer/backend/opengl/buffer.cpp
+build $objdir/index.5_name.texture.cpp.o: cxx source/renderer/backend/opengl/texture.cpp
+build $objdir/index.5_name.state.cpp.o: cxx source/renderer/backend/opengl/state.cpp
+build $objdir/index.5_name.shaders.cpp.o: cxx source/renderer/backend/opengl/shaders.cpp
+build $objdir/index.5_name.mesh.cpp.o: cxx source/renderer/backend/opengl/mesh.cpp
+build $objdir/index.5_name.material.cpp.o: cxx source/renderer/backend/opengl/material.cpp
+build $objdir/index.5_name.draw.cpp.o: cxx source/renderer/backend/opengl/draw.cpp
+build $objdir/index.5_name.initialised.cpp.o: cxx source/renderer/backend/opengl/initialised.cpp
+build $objdir/index.5_name.opengl.cpp.o: cxx source/renderer/backend/opengl/opengl.cpp
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+#######################################[ source/renderer/gpu ]#######################################
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+build $objdir/index.6_name.gpu.cpp.o: cxx source/renderer/gpu/gpu.cpp
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+###################################[ source/renderer/gpu/command ]###################################
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+build $objdir/index.7_name.command.cpp.o: cxx source/renderer/gpu/command/command.cpp
+build $objdir/index.7_name.command.dispatch.cpp.o: cxx source/renderer/gpu/command/command.dispatch.cpp
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+####################################[ source/renderer/gpu/pool ]####################################
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+build $objdir/index.8_name.mesh.cpp.o: cxx source/renderer/gpu/pool/mesh.cpp
+build $objdir/index.8_name.texture.cpp.o: cxx source/renderer/gpu/pool/texture.cpp
+build $objdir/index.8_name.queue.cpp.o: cxx source/renderer/gpu/pool/queue.cpp
+build $objdir/index.8_name.material.cpp.o: cxx source/renderer/gpu/pool/material.cpp
+build $objdir/index.8_name.shader.cpp.o: cxx source/renderer/gpu/pool/shader.cpp
+build $objdir/index.8_name.buffer.cpp.o: cxx source/renderer/gpu/pool/buffer.cpp
+build $objdir/index.8_name.descriptor.cpp.o: cxx source/renderer/gpu/pool/descriptor.cpp
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+###################################[ source/renderer/gpu/render ]###################################
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+build $objdir/index.9_name.pass.cpp.o: cxx source/renderer/gpu/render/pass.cpp
+build $objdir/index.9_name.queue.cpp.o: cxx source/renderer/gpu/render/queue.cpp
+build $objdir/index.9_name.graph.cpp.o: cxx source/renderer/gpu/render/graph.cpp
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+##################################[ source/renderer/gpu/resource ]##################################
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+build $objdir/index.10_name.material.cpp.o: cxx source/renderer/gpu/resource/material.cpp
+build $objdir/index.10_name.buffer.cpp.o: cxx source/renderer/gpu/resource/buffer.cpp
+build $objdir/index.10_name.descriptor.cpp.o: cxx source/renderer/gpu/resource/descriptor.cpp
+build $objdir/index.10_name.mesh.cpp.o: cxx source/renderer/gpu/resource/mesh.cpp
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+####################################[ source/renderer/gpu/state ]####################################
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+build $objdir/index.11_name.transform.cpp.o: cxx source/renderer/gpu/state/transform.cpp
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+##########################################[ source/engine ]##########################################
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+build $objdir/index.12_name.engine.cpp.o: cxx source/engine/engine.cpp
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+######################################[ source/engine/system ]######################################
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+build $objdir/index.13_name.node.cpp.o: cxx source/engine/system/node.cpp
+build $objdir/index.13_name.serializer.cpp.o: cxx source/engine/system/serializer.cpp
+build $objdir/index.13_name.component.cpp.o: cxx source/engine/system/component.cpp
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+#########################################[ runtime/flappy ]#########################################
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+build $objdir/runtime.cpp.o: cxx runtime/flappy/runtime.cpp
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+#####################################[ runtime/flappy/scripts ]#####################################
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+build $objdir/bird.cpp.o: cxx runtime/flappy/scripts/bird.cpp
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+#####################################Targets#####################################
+#////////////////////////////////////////////////////////////////////////////////////////////////////
+build $bindir/libblood.a: archive $objdir/index.0_name.debug.cpp.o $objdir/index.1_name.keyboard.cpp.o $objdir/index.1_name.window.config.cpp.o $objdir/index.1_name.mouse.cpp.o $objdir/index.2_name.window.cpp.o $objdir/index.4_name.xutil.cpp.o $objdir/index.5_name.buffer.cpp.o $objdir/index.5_name.texture.cpp.o $objdir/index.5_name.state.cpp.o $objdir/index.5_name.shaders.cpp.o $objdir/index.5_name.mesh.cpp.o $objdir/index.5_name.material.cpp.o $objdir/index.5_name.draw.cpp.o $objdir/index.5_name.initialised.cpp.o $objdir/index.5_name.opengl.cpp.o $objdir/index.6_name.gpu.cpp.o $objdir/index.7_name.command.cpp.o $objdir/index.7_name.command.dispatch.cpp.o $objdir/index.8_name.mesh.cpp.o $objdir/index.8_name.texture.cpp.o $objdir/index.8_name.queue.cpp.o $objdir/index.8_name.material.cpp.o $objdir/index.8_name.shader.cpp.o $objdir/index.8_name.buffer.cpp.o $objdir/index.8_name.descriptor.cpp.o $objdir/index.9_name.pass.cpp.o $objdir/index.9_name.queue.cpp.o $objdir/index.9_name.graph.cpp.o $objdir/index.10_name.material.cpp.o $objdir/index.10_name.buffer.cpp.o $objdir/index.10_name.descriptor.cpp.o $objdir/index.10_name.mesh.cpp.o $objdir/index.11_name.transform.cpp.o $objdir/index.12_name.engine.cpp.o $objdir/index.13_name.node.cpp.o $objdir/index.13_name.serializer.cpp.o $objdir/index.13_name.component.cpp.o
+
+build $bindir/flappy: link $objdir/runtime.cpp.o $objdir/bird.cpp.o $objdir/index.0_name.debug.cpp.o $objdir/index.1_name.keyboard.cpp.o $objdir/index.1_name.window.config.cpp.o $objdir/index.1_name.mouse.cpp.o $objdir/index.2_name.window.cpp.o $objdir/index.4_name.xutil.cpp.o $objdir/index.5_name.buffer.cpp.o $objdir/index.5_name.texture.cpp.o $objdir/index.5_name.state.cpp.o $objdir/index.5_name.shaders.cpp.o $objdir/index.5_name.mesh.cpp.o $objdir/index.5_name.material.cpp.o $objdir/index.5_name.draw.cpp.o $objdir/index.5_name.initialised.cpp.o $objdir/index.5_name.opengl.cpp.o $objdir/index.6_name.gpu.cpp.o $objdir/index.7_name.command.cpp.o $objdir/index.7_name.command.dispatch.cpp.o $objdir/index.8_name.mesh.cpp.o $objdir/index.8_name.texture.cpp.o $objdir/index.8_name.queue.cpp.o $objdir/index.8_name.material.cpp.o $objdir/index.8_name.shader.cpp.o $objdir/index.8_name.buffer.cpp.o $objdir/index.8_name.descriptor.cpp.o $objdir/index.9_name.pass.cpp.o $objdir/index.9_name.queue.cpp.o $objdir/index.9_name.graph.cpp.o $objdir/index.10_name.material.cpp.o $objdir/index.10_name.buffer.cpp.o $objdir/index.10_name.descriptor.cpp.o $objdir/index.10_name.mesh.cpp.o $objdir/index.11_name.transform.cpp.o $objdir/index.12_name.engine.cpp.o $objdir/index.13_name.node.cpp.o $objdir/index.13_name.serializer.cpp.o $objdir/index.13_name.component.cpp.o
+
+default $bindir/flappy
