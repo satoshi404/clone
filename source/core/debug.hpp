@@ -38,5 +38,16 @@ namespace TerminalDebug
 		return return_value;                                    \
 	}\
 
+#define ThrowIfFailed( ptr )                                        \
+	do {                                                            \
+		if (!(ptr))                                                 \
+		{                                                           \
+			TerminalDebug::println(PrintColorType_Red, "Failed: %d:%d\n", __LINE__, __builtin_COLUMN()); \
+			__debugbreak();                                         \
+		}                                                           \
+	} while(0)
 
-#define todo( message ) TerminalDebug::println( PrintColorType_Yellow, "TODO: %s at %s:%d:%d ", message, __FILE__, __LINE__, __builtin_COLUMN() );
+
+#define todo( message ) \
+	TerminalDebug::println( PrintColorType_Yellow, "TODO: %s at %s:%d:%d ", message, __FILE__, __LINE__, __builtin_COLUMN() );\
+	__debugbreak();

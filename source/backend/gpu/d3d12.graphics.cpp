@@ -6,6 +6,8 @@
 
 #include <cstring>
 
+#include <stdio.h>
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #if GRAPHICS_API_D3D12 || 1
@@ -25,6 +27,7 @@ namespace Window
 
 static ID3D12Device *device = nullptr;
 static ID3D12CommandQueue *commandQueue = nullptr;
+static IDXGIFactory4 *dxgiFactory = nullptr;
 static IDXGISwapChain3 *swapChain = nullptr;
 static ID3D12DescriptorHeap *rtvHeap = nullptr;
 static ID3D12Resource *renderTargets[2] = { nullptr, nullptr };
@@ -174,7 +177,6 @@ bool Backend::init()
 #endif
 
 	// Create factory
-	IDXGIFactory4 *dxgiFactory = nullptr;
 	HRESULT hr = CreateDXGIFactory2(dxgiFactoryFlags, IID_PPV_ARGS(&dxgiFactory));
 	if (FAILED(hr))
 	{
@@ -214,7 +216,6 @@ bool Backend::init()
 	// Create swap chain
 	IDXGISwapChain1 *tempSwapChain = nullptr;
 	hr = dxgiFactory->CreateSwapChainForHwnd(commandQueue, Window::hwnd, &swapChainDesc, nullptr, nullptr, &tempSwapChain);
-	dxgiFactory->Release();
 	if (FAILED(hr))
 	{
 		TerminalDebug::println(PrintColorType_Red, "Failed to create swap chain");
@@ -388,6 +389,25 @@ bool Backend::init()
 	return true;
 }
 
+void Backend::info()
+{
+	DXGI_ADAPTER_DESC1 desc;
+    for ( int index = 0;; index++ )
+    {
+        IDXGIAdapter1* adapter = nullptr;
+
+		HRESULT hr = dxgiFactory->EnumAdapters1( index, &adapter );
+		if ( hr ==  DXGI_ERROR_NOT_FOUND ) break;
+
+        if ( SUCCEEDED( adapter->GetDesc1( &desc ) ) )
+        {
+            TerminalDebug::println( "Gpu[%d] name: %ls", index, desc.Description );
+        }
+
+		adapter->Release();
+    }
+}
+
 void Backend::free()
 {
 	// Ensure the GPU has fully completed all scheduled operations before sweeping memory
@@ -404,6 +424,8 @@ void Backend::free()
 
 	if (fenceEvent) { CloseHandle(fenceEvent); fenceEvent = nullptr; }
 	if (fence) { fence->Release(); fence = nullptr; }
+
+	if (dxgiFactory) { dxgiFactory->Release();  dxgiFactory = nullptr; }
 
 	if (rootSignature) { rootSignature->Release(); rootSignature = nullptr; }
 
@@ -602,7 +624,13 @@ ShaderHandle Backend::shader_create(const ShaderDesc &desc)
 
 	ID3DBlob *blob = nullptr;
 	ID3DBlob *errorBlob = nullptr;
-	HRESULT hr = D3DCompile(desc.code, codeSize, nullptr, nullptr, nullptr, desc.entryPoint, target, compileFlags, 0, &blob, &errorBlob);
+
+	const char* entryPoint = desc.entryPoint ? desc.entryPoint :
+                         (desc.stage == ShaderStage::Vertex ? "VSMain" : "PSMain");
+
+	TerminalDebug::println( PrintColorType_Cyan, entryPoint );
+
+	HRESULT hr = D3DCompile(desc.code, codeSize, nullptr, nullptr, nullptr, entryPoint, target, compileFlags, 0, &blob, &errorBlob);
 	if (FAILED(hr))
 	{
 		if (errorBlob) { TerminalDebug::println(PrintColorType_Red, (const char*)errorBlob->GetBufferPointer()); errorBlob->Release(); }
@@ -802,7 +830,7 @@ void Backend::command_list_execute(::CommandList *cmdList)
 					{
 						// TODO: textures/samplers need an SRV/sampler descriptor heap + descriptor
 						// table root parameter, which this backend doesn't allocate yet.
-						TerminalDebug::println(PrintColorType_Yellow, "Texture/Sampler descriptors not implemented yet");
+						todo( "Texture/Sampler descriptors not implemented yet" );
 					}
 				}
 				break;
@@ -864,7 +892,7 @@ void Backend::command_list_execute(::CommandList *cmdList)
 			{
 				// TODO: compute needs its own PSO type (D3D12_COMPUTE_PIPELINE_STATE_DESC) —
 				// pipeline_create above only builds graphics PSOs so far.
-				TerminalDebug::println(PrintColorType_Yellow, "Compute dispatch not implemented yet");
+				todo( "Compute dispatch not implemented yet" );
 				break;
 			}
 		}

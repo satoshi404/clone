@@ -16,6 +16,8 @@ bool Gpu::gpu_backend_init()
 		return false;
 	}
 
+	Backend::info();
+
 	return true;
 }
 

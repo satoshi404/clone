@@ -2,19 +2,10 @@
 #include <backend/input/keys.hpp>
 #include <backend/keyboard.hpp>
 #include <backend/gpu.hpp>
-
 #include <core/debug.hpp>
-
 #include <string.h>
 
 static const char *shaderSource = R"(
-// Equivalent to an OpenGL Uniform Block
-cbuffer MyUniforms : register(b0)
-{
-    float3 u_offset; // 12 bytes
-    float  u_time;   // 4 bytes -> (Total block size: 16 bytes)
-};
-
 struct VSInput
 {
     float3 position : ATTRIB0;
@@ -30,14 +21,8 @@ struct PSInput
 PSInput VSMain(VSInput input)
 {
     PSInput output;
-
-    // Using the uniform variables just like in OpenGL!
-    float3 finalPosition = input.position + u_offset;
-    finalPosition.y += sin(u_time) * 0.2f; // simple bounce animation
-
-    output.position = float4(finalPosition, 1.0f);
+    output.position = float4( input.position, 1.0f );
     output.color = input.color;
-
     return output;
 }
 
@@ -47,11 +32,9 @@ float4 PSMain(PSInput input) : SV_TARGET
 }
 )";
 
-
 static float data[] =
 {
     // Triangle 1
-    // position              // color
      0.5f,  0.5f, 0.0f,      1.0f, 0.0f, 0.0f, 1.0f, // Top-Right
     -0.5f,  0.5f, 0.0f,      0.0f, 1.0f, 0.0f, 1.0f, // Top-Left
     -0.5f, -0.5f, 0.0f,      0.0f, 1.0f, 1.0f, 1.0f, // Bottom-Left
@@ -62,6 +45,63 @@ static float data[] =
      0.5f,  0.5f, 0.0f,      1.0f, 0.0f, 0.0f, 1.0f  // Top-Right (Shared)
 };
 
+// ==========================================
+// RAII WRAPPERS FOR CLEAN AUTOMATIC CLEANUP
+// ==========================================
+struct ScopedGpuBackend {
+    bool initialized = false;
+    ScopedGpuBackend() { initialized = Gpu::gpu_backend_init(); }
+    ~ScopedGpuBackend() { if (initialized) Gpu::gpu_backend_free(); }
+};
+
+struct ScopedBuffer {
+    BufferHandle handle { HANDLE_INVALID };
+    ScopedBuffer(const BufferDesc& desc) { handle = Gpu::buffer_create(desc); }
+    ~ScopedBuffer() { if (handle.handle.generation != Handle{ HANDLE_INVALID }.generation) Gpu::buffer_destroy(handle); }
+};
+
+struct ScopedShader {
+    ShaderHandle handle { HANDLE_INVALID };
+    ScopedShader(const ShaderDesc& desc) { handle = Gpu::shader_create(desc); }
+    ~ScopedShader() { if (handle.handle.generation != Handle{ HANDLE_INVALID }.generation) Gpu::shader_destroy(handle); }
+};
+
+struct ScopedCommandList {
+    CommandList list;
+    bool initialized = false;
+    ScopedCommandList(isize size) { initialized = Gpu::command_list_init(&list, size); }
+    ~ScopedCommandList() { if (initialized) Gpu::command_list_free(&list); }
+};
+
+struct ScopedRenderPass {
+    RenderPass pass;
+    bool initialized = false;
+    ScopedRenderPass(u32 width, u32 height) {
+        TextureHandle localColorAttachments[4] = { { HANDLE_INVALID }, { HANDLE_INVALID }, { HANDLE_INVALID }, { HANDLE_INVALID } };
+        pass.colorAttachments[0] = localColorAttachments[0];
+        pass.colorAttachments[1] = localColorAttachments[1];
+        pass.colorAttachments[2] = localColorAttachments[2];
+        pass.colorAttachments[3] = localColorAttachments[3];
+        initialized = Gpu::render_pass_init(&pass, width, height, 1, 1);
+    }
+    ~ScopedRenderPass() { if (initialized) Gpu::render_pass_free(&pass); }
+};
+
+struct ScopedPipeline {
+    PipelineHandle handle { HANDLE_INVALID };
+    ScopedPipeline(const PipelineDesc& desc) { handle = Gpu::pipeline_create(desc); }
+    ~ScopedPipeline() { if (handle.handle.generation != Handle{ HANDLE_INVALID }.generation) Gpu::pipeline_destroy(handle); }
+};
+
+struct ScopedMesh {
+    MeshHandle handle { HANDLE_INVALID };
+    ScopedMesh(const MeshDesc& desc) { handle = Gpu::mesh_create(desc); }
+    ~ScopedMesh() { if (handle.handle.generation != Handle{ HANDLE_INVALID }.generation) Gpu::mesh_destroy(handle); }
+};
+
+// ==========================================
+// MAIN APPLICATION
+// ==========================================
 int main()
 {
   if (!Window::init())
@@ -69,11 +109,13 @@ int main()
     TerminalDebug::println(PrintColorType_Red, "Failed init window");
     return EXIT_FAILED;
   }
+  // Ensure window is always terminated safely on return
+  struct WindowGuard { ~WindowGuard() { Window::terminate(); } } windowGuard;
 
-  if ( !Gpu::gpu_backend_init() )
+  ScopedGpuBackend gpuBackend;
+  if (!gpuBackend.initialized)
   {
     TerminalDebug::println(PrintColorType_Red, "Failed init GPU backend");
-    Window::terminate();
     return EXIT_FAILED;
   }
 
@@ -82,111 +124,67 @@ int main()
   triangle.size = sizeof(data);
   triangle.type = BufferType::Vertex;
   triangle.usage = BufferUsage::Static;
-  BufferHandle buffer_vertex = Gpu::buffer_create( triangle );
+  ScopedBuffer buffer_vertex(triangle);
 
   ShaderDesc vertexShaderDesc;
   vertexShaderDesc.stage = ShaderStage::Vertex;
-  vertexShaderDesc.codeSize = strlen( shaderSource );
+  vertexShaderDesc.codeSize = strlen(shaderSource);
   vertexShaderDesc.code = shaderSource;
-  vertexShaderDesc.entryPoint = "VSMain";
-  ShaderHandle vsHandle = Gpu::shader_create( vertexShaderDesc );
+  ScopedShader vsHandle(vertexShaderDesc);
 
   ShaderDesc fragmentShaderDesc;
   fragmentShaderDesc.stage = ShaderStage::Fragment;
   fragmentShaderDesc.codeSize = strlen(shaderSource);
   fragmentShaderDesc.code = shaderSource;
-  fragmentShaderDesc.entryPoint = "PSMain";
-  ShaderHandle fsHandle = Gpu::shader_create(fragmentShaderDesc);
+  ScopedShader fsHandle(fragmentShaderDesc);
 
-  CommandList cmdList;
-  if (!Gpu::command_list_init(&cmdList, 32))
+  ScopedCommandList cmdList(32);
+  if (!cmdList.initialized)
   {
     TerminalDebug::println(PrintColorType_Red, "Failed to initialize CommandList");
-    Gpu::shader_destroy(vsHandle);
-    Gpu::shader_destroy(fsHandle);
-    Gpu::buffer_destroy(buffer_vertex);
-    Gpu::gpu_backend_free();
-    Window::terminate();
     return EXIT_FAILED;
   }
 
-  TextureHandle localColorAttachments[4] = { { HANDLE_INVALID }, { HANDLE_INVALID }, { HANDLE_INVALID }, { HANDLE_INVALID } };
-  RenderPass renderPass;
-  renderPass.colorAttachments[0] = localColorAttachments[0];
-  renderPass.colorAttachments[1] = localColorAttachments[1];
-  renderPass.colorAttachments[2] = localColorAttachments[2];
-  renderPass.colorAttachments[3] = localColorAttachments[3];
-
-  if (!Gpu::render_pass_init( &renderPass, WindowConfig::get_width(), WindowConfig::get_height(), 1, 1))
+  ScopedRenderPass renderPass(WindowConfig::get_width(), WindowConfig::get_height());
+  if (!renderPass.initialized)
   {
     TerminalDebug::println(PrintColorType_Red, "Failed to initialize render pass");
-    Gpu::command_list_free(&cmdList);
-    Gpu::shader_destroy(vsHandle);
-    Gpu::shader_destroy(fsHandle);
-    Gpu::buffer_destroy(buffer_vertex);
-    Gpu::gpu_backend_free();
-    Window::terminate();
     return EXIT_FAILED;
   }
 
-  renderPass.clearColor[0] = 0.3f;
-  renderPass.clearColor[1] = 0.3f;
-  renderPass.clearColor[2] = 0.3f;
-  renderPass.clearColor[3] = 1.0f;
+  renderPass.pass.clearColor[0] = 0.3f;
+  renderPass.pass.clearColor[1] = 0.3f;
+  renderPass.pass.clearColor[2] = 0.3f;
+  renderPass.pass.clearColor[3] = 1.0f;
 
-  // Configuração explícita do Vertex Layout exigida pelo seu D3D12 Backend
- PipelineDesc pipeline = {};
+  PipelineDesc pipeline = {};
+  pipeline.vertexShader = vsHandle.handle;
+  pipeline.fragmentShader = fsHandle.handle;
+  pipeline.blendEnable = false;
+  pipeline.topology = PrimitiveTopology::TriangleList;
+  pipeline.cullMode = CullMode::None;
 
-pipeline.vertexShader = vsHandle;
-pipeline.fragmentShader = fsHandle;
-
-pipeline.blendEnable = false;
-
-pipeline.topology = PrimitiveTopology::TriangleList;
-pipeline.cullMode = CullMode::None;
-
-  // Atributo 0: Posição (float3) -> Localização 0, Offset 0
   pipeline.vertexLayout.attributes[0].location = 0;
-  pipeline.vertexLayout.attributes[0].format = VertexFormat::Float3; // Assumindo enum compatível com float3
+  pipeline.vertexLayout.attributes[0].format = VertexFormat::Float3;
   pipeline.vertexLayout.attributes[0].offset = 0;
 
-  // Atributo 1: Cor (float4) -> Localização 1, Offset 12 bytes (após os 3 floats de posição)
   pipeline.vertexLayout.attributes[1].location = 1;
-  pipeline.vertexLayout.attributes[1].format = VertexFormat::Float4; // Assumindo enum compatível com float4
+  pipeline.vertexLayout.attributes[1].format = VertexFormat::Float4;
   pipeline.vertexLayout.attributes[1].offset = 3 * sizeof(float);
 
   pipeline.vertexLayout.attributeCount = 2;
-  pipeline.vertexLayout.stride = 7 * sizeof(float); // Total de bytes por vértice (3 pos + 4 cor = 28)
+  pipeline.vertexLayout.stride = 7 * sizeof(float);
 
-  PipelineHandle pHandle = Gpu::pipeline_create( pipeline );
+  ScopedPipeline pHandle(pipeline);
+  if (pHandle.handle.handle.generation == Handle{ HANDLE_INVALID }.generation)
+  {
+    return EXIT_FAILED;
+  }
 
   MeshDesc canvasMeshDesc = {};
-  canvasMeshDesc.vertexBuffer = buffer_vertex;
+  canvasMeshDesc.vertexBuffer = buffer_vertex.handle;
   canvasMeshDesc.vertexCount = 6;
-  MeshHandle screenQuadMesh = Gpu::mesh_create(canvasMeshDesc);
-
-  float totalElapsedTime = 0.;
-
-  struct EngineUniforms {
-    float offset[3];
-    float time;
-  };
-
-  EngineUniforms cpuData;
-  cpuData.offset[0] = 0.0f;
-  cpuData.offset[1] = 0.1f; // Shift up slightly
-  cpuData.offset[2] = 0.0f;
-  cpuData.time = totalElapsedTime;
-
-
-  DescriptorBinding binding = {};
-  binding.slot = 0;
-  binding.type = DescriptorType::UniformBuffer;
-
-  DescriptorSetDesc desc = {};
-  desc.bindings = &binding;
-  desc.bindingCount = 1;
-  DescriptorSetHandle desHandle = Gpu::descriptor_set_create(  desc );
+  ScopedMesh screenQuadMesh(canvasMeshDesc);
 
   Window::show();
 
@@ -199,31 +197,14 @@ pipeline.cullMode = CullMode::None;
     }
     Keyboard::update(0);
 
-    cpuData.time += 0.016f;
-    Gpu::descriptor_set_update( desHandle , desc);
+    Gpu::command_list_clear(&cmdList.list);
 
-    Gpu::command_list_clear(&cmdList);
-
-    Gpu::render_pass_begin(&renderPass);
-    // Grava os tokens na fila da CPU
-    Gpu::command_list_set_pipeline(&cmdList, pHandle);
-    Gpu::command_list_set_descriptor_set(&cmdList, desHandle, 0);
-    Gpu::command_list_draw_mesh(&cmdList, screenQuadMesh, 1);
-    Gpu::command_list_execute(&cmdList);
-    // Executa o ciclo de vida nativo e desenha o frame
-    Gpu::render_pass_end(&renderPass);
+    Gpu::render_pass_begin(&renderPass.pass);
+    Gpu::command_list_set_pipeline(&cmdList.list, pHandle.handle);
+    Gpu::command_list_draw_mesh(&cmdList.list, screenQuadMesh.handle, 1);
+    Gpu::command_list_execute(&cmdList.list);
+    Gpu::render_pass_end(&renderPass.pass);
   }
-
-  Gpu::mesh_destroy(screenQuadMesh);
-  Gpu::pipeline_destroy(pHandle);
-  Gpu::command_list_free(&cmdList);
-  Gpu::render_pass_free(&renderPass);
-  Gpu::shader_destroy(vsHandle);
-  Gpu::shader_destroy(fsHandle);
-  Gpu::buffer_destroy(buffer_vertex);
-
-  Gpu::gpu_backend_free();
-  Window::terminate();
 
   return EXIT_SUCCESS;
 }

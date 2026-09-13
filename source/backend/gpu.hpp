@@ -170,7 +170,7 @@ struct ShaderDesc
 	ShaderStage stage;
 	const void *code;    // GLSL/HLSL source text, or SPIR-V/DXBC/DXIL bytecode, depending on backend
 	u32 codeSize;         // in bytes; for null-terminated text sources this can be 0 and the backend uses strlen
-	const char *entryPoint; // e.g. "main" for GLSL/SPIR-V, "VSMain"/"PSMain" for HLSL
+	const char *entryPoint = nullptr; // e.g. "main" for GLSL/SPIR-V, "VSMain"/"PSMain" for HLSL
 };
 
 enum class PrimitiveTopology : u32
